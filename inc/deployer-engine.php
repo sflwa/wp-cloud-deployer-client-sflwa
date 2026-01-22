@@ -37,7 +37,7 @@ function wpcd_render_deployment_screen() {
 		
 		<div class="card" style="max-width: 800px; padding: 20px; margin-bottom: 20px;">
 			<h2>Step 1: Start Site Architecture</h2>
-			<p>Installs all "Must-Have" plugins from your Master and activates licenses via CLI.</p>
+			<p>Installs the Core Theme, Must-Have plugins, and activates licenses via CLI.</p>
 			<button id="wpcd-start-architecture" class="button button-primary button-large">Install Core Architecture</button>
 			<div id="wpcd-architecture-status" style="margin-top:15px; padding:10px; border-radius:4px; display:none;"></div>
 		</div>
@@ -87,7 +87,7 @@ function wpcd_render_deployment_screen() {
 			var status = $('#wpcd-architecture-status');
 			
 			btn.prop('disabled', true).text('Deploying...');
-			status.show().html('<strong>Starting:</strong> Connecting to Master and downloading ZIPs...');
+			status.show().html('<strong>Starting:</strong> Fetching Core Defaults from Master...');
 
 			$.post(ajaxurl, {
 				action: 'wpcd_start_architecture',
@@ -105,7 +105,7 @@ function wpcd_render_deployment_screen() {
 			});
 		});
 
-		// Trigger Step 2: Package Injection
+		// Trigger Step 2: Package Injection (Plugins/Pages/Forms)
 		$('#wpcd-inject-package').on('click', function() {
 			var pkgId = $('#wpcd-package-select').val();
 			if(!pkgId) { alert('Please select a package first.'); return; }
@@ -149,15 +149,20 @@ function wpcd_handle_architecture_deployment() {
 
 	$response = wp_remote_get( 
 		untrailingslashit( $master_url ) . '/wp-json/wpcd/v1/defaults', 
-		array( 'headers' => wpcd_get_api_headers(), 'timeout' => 60 ) 
+		array( 'headers' => wpcd_get_api_headers(), 'timeout' => 90 ) 
 	);
 
 	if ( is_wp_error( $response ) ) { wp_send_json_error( 'Could not reach Master site.' ); }
 
 	$body = json_decode( wp_remote_retrieve_body( $response ), true );
+	$core_theme   = isset( $body['core_theme'] ) ? $body['core_theme'] : 'astra';
 	$core_plugins = isset( $body['core_plugins'] ) ? $body['core_plugins'] : array();
 	$license_keys = isset( $body['license_keys'] ) ? $body['license_keys'] : '';
 
+	// 1. Install & Activate Core Theme via CLI
+	shell_exec( sprintf( 'wp theme install %s --activate', escapeshellarg( $core_theme ) ) );
+
+	// 2. Install & Activate each Core Plugin ZIP
 	$count = 0;
 	foreach ( $core_plugins as $plugin ) {
 		if ( wpcd_sideload_plugin( $plugin['url'] ) ) {
@@ -165,11 +170,12 @@ function wpcd_handle_architecture_deployment() {
 		}
 	}
 
+	// 3. Execute CLI Activations (Elementor, GF, Astra Pro)
 	if ( ! empty( $license_keys ) && function_exists( 'wpcd_execute_cli_activation' ) ) {
 		wpcd_execute_cli_activation( $license_keys );
 	}
 
-	wp_send_json_success( array( 'message' => "Installed $count core plugins and processed licenses." ) );
+	wp_send_json_success( array( 'message' => "Theme ($core_theme) activated, $count core plugins installed, and licenses processed via CLI." ) );
 }
 
 /**
@@ -183,7 +189,7 @@ function wpcd_handle_package_injection() {
 	$master_url = get_option( 'wpcd_master_url' );
 	$response = wp_remote_get( 
 		untrailingslashit( $master_url ) . "/wp-json/wpcd/v1/package/$package_id", 
-		array( 'headers' => wpcd_get_api_headers(), 'timeout' => 60 ) 
+		array( 'headers' => wpcd_get_api_headers(), 'timeout' => 90 ) 
 	);
 
 	if ( is_wp_error( $response ) ) { wp_send_json_error( 'Package retrieval failed.' ); }
@@ -195,8 +201,7 @@ function wpcd_handle_package_injection() {
 		wpcd_sideload_plugin( $plugin['url'] );
 	}
 
-	// 2. Logic for Elementor Page/Form Import would be triggered here
-	// ... (We'll bridge this to the Import Logic) ...
+	// Future: Elementor Data / GF XML import logic here
 
 	wp_send_json_success( array( 'message' => "Package '{$data['title']}' assets pulled successfully." ) );
 }
@@ -221,10 +226,16 @@ function wpcd_sideload_plugin( $url ) {
 	$path = parse_url( $url, PHP_URL_PATH );
 	$slug = basename( $path, '.zip' );
 	
-	// Try to find the main plugin file
 	$plugin_file = "$slug/$slug.php";
 	if ( file_exists( WP_PLUGIN_DIR . '/' . $plugin_file ) ) {
 		activate_plugin( $plugin_file );
+	} else {
+		// Fallback for plugins where main file != folder name
+		$all_plugins = get_plugins( '/' . $slug );
+		if ( ! empty( $all_plugins ) ) {
+			$keys = array_keys( $all_plugins );
+			activate_plugin( $slug . '/' . $keys[0] );
+		}
 	}
 
 	return $slug;
