@@ -1,6 +1,6 @@
 <?php
 /**
- * Handles terminal-level activation for Premium plugins.
+ * Handles terminal-level activation for Premium plugins and post-deployment cleanup.
  *
  * @package WPCloudDeployerClient
  */
@@ -39,6 +39,9 @@ function wpcd_execute_cli_activation( $license_string ) {
 				break;
 		}
 	}
+
+	// Run cleanup once all keys are processed
+	wpcd_cli_cleanup();
 }
 
 /**
@@ -54,23 +57,32 @@ function wpcd_cli_activate_elementor( $key ) {
  * Gravity Forms Activation via CLI.
  */
 function wpcd_cli_activate_gravityforms( $key ) {
-	// 1. Install/Activate GF CLI add-on first (required for 'wp gf' commands)
-	$install_cli_addon = 'wp plugin install gravityformscli --activate';
-	shell_exec( $install_cli_addon );
+	// 1. Install/Activate GF CLI add-on (Required for 'wp gf' commands)
+	shell_exec( 'wp plugin install gravityformscli --activate' );
 
-	// 2. Install GF core and register key
-	// Command: wp gf install --key=[key] --activate
+	// 2. Register GF core key and activate
 	$command = sprintf( 'wp gf install --key=%s --activate', escapeshellarg( $key ) );
 	shell_exec( $command );
 }
 
 /**
- * Generic shell command helper for future cleanup/optimization.
+ * Cleanup Service: Deletes helper plugins and flushes caches.
  */
-function wpcd_run_cleanup_commands() {
-	// Example: Flush rewrite rules and clear caches after deployment
+function wpcd_cli_cleanup() {
+	// 1. Delete Gravity Forms CLI helper (No longer needed after activation)
+	shell_exec( 'wp plugin deactivate gravityformscli' );
+	shell_exec( 'wp plugin delete gravityformscli' );
+
+	// 2. Flush Rewrite Rules
 	shell_exec( 'wp rewrite flush' );
-	if ( function_exists( 'rocket_clean_domain' ) ) {
-		shell_exec( 'wp rocket clean --confirm' );
+
+	// 3. SiteGround Specific: Flush Object Cache if available
+	if ( class_exists( 'SG_CachePress' ) ) {
+		shell_exec( 'wp sg purge' );
+	}
+
+	// 4. Clear Elementor CSS Cache to prevent styling issues on import
+	if ( class_exists( '\Elementor\Plugin' ) ) {
+		shell_exec( 'wp elementor flush_css' );
 	}
 }
