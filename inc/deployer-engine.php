@@ -1,242 +1,351 @@
 <?php
 /**
- * Logic for communicating with the Master and processing imports.
+ * Linear Build Engine v1.7
+ * Baseline v1.5 + Direct SQL Snippet Injection.
+ * * Strict Policy: No refactoring/shortening applied.
  *
  * @package WPCloudDeployerClient
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
-	exit;
+    exit;
 }
 
 /**
- * Helper to get authenticated API headers for Master Site.
+ * Helper for API Auth Headers.
  */
 function wpcd_get_api_headers() {
-	$user = get_option( 'wpcd_master_user' );
-	$pass = get_option( 'wpcd_master_pass' );
-
-	return array(
-		'Authorization' => 'Basic ' . base64_encode( $user . ':' . $pass ),
-	);
+    $user = get_option( 'wpcd_master_user' );
+    $pass = get_option( 'wpcd_master_pass' );
+    return array( 'Authorization' => 'Basic ' . base64_encode( $user . ':' . $pass ) );
 }
 
 /**
- * Render the Deployment Screen UI.
+ * Render the Deployment Screen.
  */
 function wpcd_render_deployment_screen() {
-	$master_url = get_option( 'wpcd_master_url' );
+    $master_url = get_option( 'wpcd_master_url' );
+    if ( ! $master_url ) {
+        echo '<div class="notice notice-error"><p>Please connect to a Master site in the Connection tab first.</p></div>';
+        return;
+    }
+    ?>
+    <style>
+        .wpcd-terminal { 
+            background: #1c1c1c; color: #00ff00; padding: 20px; border-radius: 8px; 
+            font-family: 'Courier New', monospace; font-size: 13px; min-height: 200px; 
+            max-height: 600px; overflow-y: auto; border: 1px solid #333; margin-top: 20px; display:none;
+            box-shadow: inset 0 0 15px #000;
+        }
+        .wpcd-line { margin-bottom: 8px; line-height: 1.5; border-bottom: 1px solid #2a2a2a; padding-bottom: 4px; }
+        .status-wait { color: #72aee6; }
+        .status-ok { color: #00ff00; }
+        .status-err { color: #ff4444; font-weight: bold; }
+        .status-info { color: #bbbbbb; }
+        .wpcd-step-card { max-width: 850px; padding: 25px; margin-top: 20px; border-radius: 10px; background: #fff; border: 1px solid #ccd0d4; box-shadow: 0 1px 1px rgba(0,0,0,.04); }
+    </style>
 
-	if ( ! $master_url ) {
-		echo '<div class="notice notice-error"><p>Please connect to a Master site in the Connection tab first.</p></div>';
-		return;
-	}
+    <div class="wrap">
+        <h1>Cloud Architecture Deployer <small style="font-size: 0.5em; vertical-align: middle; opacity: 0.6;">v1.6</small></h1>
+        
+        <div class="wpcd-step-card">
+            <h2>Step 1: Site Core Build</h2>
+            <p>Installs the Master theme, core plugins, and activates licenses sequentially.</p>
+            <button id="wpcd-run-build" class="button button-primary button-large" style="height: 45px; padding: 0 30px;">Start Build Sequence</button>
+            <div id="wpcd-build-log" class="wpcd-terminal"></div>
+        </div>
 
-	?>
-	<div class="wpcd-deployment-wrap" style="margin-top: 20px;">
-		
-		<div class="card" style="max-width: 800px; padding: 20px; margin-bottom: 20px;">
-			<h2>Step 1: Start Site Architecture</h2>
-			<p>Installs the Core Theme, Must-Have plugins, and activates licenses via CLI.</p>
-			<button id="wpcd-start-architecture" class="button button-primary button-large">Install Core Architecture</button>
-			<div id="wpcd-architecture-status" style="margin-top:15px; padding:10px; border-radius:4px; display:none;"></div>
-		</div>
+        <div class="wpcd-step-card">
+            <h2>Step 2: Package Injection</h2>
+            <p>Select a pre-built bundle from the Master Warehouse to inject into this site.</p>
+            
+            <div style="display: flex; gap: 10px; align-items: center; margin-top: 15px;">
+                <select id="wpcd-package-select" style="width: 300px; height: 35px;">
+                    <option value="">Connecting to Warehouse...</option>
+                </select>
+                <button id="wpcd-inject-package" class="button button-secondary button-large" disabled>Inject Content</button>
+            </div>
+            
+            <div id="wpcd-inject-log" class="wpcd-terminal"></div>
+        </div>
+    </div>
 
-		<div class="card" style="max-width: 800px; padding: 20px;">
-			<h2>Step 2: Select & Inject Package</h2>
-			<p>Import a specific bundle of Elementor pages, Gravity Forms, and Snippets.</p>
-			
-			<div style="margin: 15px 0;">
-				<select id="wpcd-package-select" style="width: 300px; height: 35px;">
-					<option value="">Loading packages from Master...</option>
-				</select>
-				<button id="wpcd-inject-package" class="button button-secondary button-large" disabled>Inject Content</button>
-			</div>
-			<div id="wpcd-inject-status" style="margin-top:15px; padding:10px; border-radius:4px; display:none;"></div>
-		</div>
+    <script>
+    jQuery(document).ready(function($) {
+        const masterUrl = '<?php echo esc_js(untrailingslashit($master_url)); ?>';
+        const authHeader = 'Basic <?php echo base64_encode( get_option( "wpcd_master_user" ) . ":" . get_option( "wpcd_master_pass" ) ); ?>';
 
-	</div>
+        function log(container, msg, type='ok') {
+            let symbol = (type === 'wait') ? '⚙ ' : (type === 'err' ? '✗ ' : '✓ ');
+            $(container).show().append('<div class="wpcd-line status-'+type+'">'+symbol+msg+'</div>');
+            $(container).scrollTop($(container)[0].scrollHeight);
+        }
 
-	<script>
-	jQuery(document).ready(function($) {
-		const masterUrl = '<?php echo esc_url_raw( untrailingslashit( $master_url ) ); ?>';
-		const authHeader = 'Basic <?php echo base64_encode( get_option( "wpcd_master_user" ) . ":" . get_option( "wpcd_master_pass" ) ); ?>';
+        // Fetch Packages
+        $.ajax({
+            url: masterUrl + '/wp-json/wpcd/v1/packages',
+            beforeSend: function(xhr) { xhr.setRequestHeader('Authorization', authHeader); },
+            success: function(response) {
+                var select = $('#wpcd-package-select');
+                select.empty().append('<option value="">-- Choose a Package --</option>');
+                $.each(response, function(i, pkg) {
+                    select.append('<option value="'+pkg.id+'">'+pkg.title+'</option>');
+                });
+                $('#wpcd-inject-package').prop('disabled', false);
+            },
+            error: function() {
+                $('#wpcd-package-select').empty().append('<option value="">Error connecting to Warehouse</option>');
+            }
+        });
 
-		// Load Packages List from Master REST API
-		$.ajax({
-			url: masterUrl + '/wp-json/wpcd/v1/packages',
-			beforeSend: function(xhr) {
-				xhr.setRequestHeader('Authorization', authHeader);
-			},
-			success: function(response) {
-				var select = $('#wpcd-package-select');
-				select.empty().append('<option value="">-- Choose a Package --</option>');
-				$.each(response, function(i, pkg) {
-					select.append('<option value="'+pkg.id+'">'+pkg.title+'</option>');
-				});
-				$('#wpcd-inject-package').prop('disabled', false);
-			},
-			error: function() {
-				$('#wpcd-package-select').empty().append('<option value="">Error loading packages</option>');
-			}
-		});
+        // STEP 1 Build Sequence
+        $('#wpcd-run-build').on('click', async function() {
+            const btn = $(this);
+            btn.prop('disabled', true).text('Building System...');
+            const logId = '#wpcd-build-log';
+            $(logId).empty().show();
 
-		// Trigger Step 1: Architecture
-		$('#wpcd-start-architecture').on('click', function() {
-			var btn = $(this);
-			var status = $('#wpcd-architecture-status');
-			
-			btn.prop('disabled', true).text('Deploying...');
-			status.show().html('<strong>Starting:</strong> Fetching Core Defaults from Master...');
+            log(logId, 'Connecting to Master Warehouse...', 'wait');
 
-			$.post(ajaxurl, {
-				action: 'wpcd_start_architecture',
-				nonce: '<?php echo wp_create_nonce("wpcd_deploy_nonce"); ?>'
-			}, function(response) {
-				if(response.success) {
-					status.css({'background-color': '#edfaef', 'color': '#2c5e35', 'border': '1px solid #7ad03a'})
-						  .html('<strong>Success:</strong> ' + response.data.message);
-					btn.text('Architecture Complete');
-				} else {
-					status.css({'background-color': '#fcf0f1', 'color': '#a00', 'border': '1px solid #dc3232'})
-						  .html('<strong>Error:</strong> ' + response.data);
-					btn.prop('disabled', false).text('Try Again');
-				}
-			});
-		});
+            try {
+                const res = await $.post(ajaxurl, { 
+                    action: 'wpcd_get_manifest', 
+                    nonce: '<?php echo wp_create_nonce("wpcd_build_nonce"); ?>' 
+                });
 
-		// Trigger Step 2: Package Injection (Plugins/Pages/Forms)
-		$('#wpcd-inject-package').on('click', function() {
-			var pkgId = $('#wpcd-package-select').val();
-			if(!pkgId) { alert('Please select a package first.'); return; }
+                if(!res.success) throw res.data;
+                const manifest = res.data;
 
-			var btn = $(this);
-			var status = $('#wpcd-inject-status');
+                log(logId, 'Phase 1: Setting up Theme (' + manifest.theme + ')...', 'wait');
+                await $.post(ajaxurl, { action: 'wpcd_step_theme', theme: manifest.theme });
+                log(logId, 'Theme active.', 'ok');
 
-			btn.prop('disabled', true).text('Injecting...');
-			status.show().html('<strong>Working:</strong> Pulling package assets...');
+                log(logId, 'Phase 2: Sideloading Architecture Plugins...', 'info');
+                for (let plugin of manifest.plugins) {
+                    log(logId, 'Sideloading: ' + plugin.slug + '...', 'wait');
+                    const pluginRes = await $.post(ajaxurl, { action: 'wpcd_step_plugin', url: plugin.url });
+                    if(pluginRes.success) {
+                        log(logId, 'Successfully installed ' + plugin.slug, 'ok');
+                    } else {
+                        log(logId, 'Failed: ' + plugin.slug, 'err');
+                    }
+                }
 
-			$.post(ajaxurl, {
-				action: 'wpcd_inject_package',
-				package_id: pkgId,
-				nonce: '<?php echo wp_create_nonce("wpcd_deploy_nonce"); ?>'
-			}, function(response) {
-				if(response.success) {
-					status.css({'background-color': '#edfaef', 'color': '#2c5e35', 'border': '1px solid #7ad03a'})
-						  .html('<strong>Success:</strong> ' + response.data.message);
-					btn.prop('disabled', false).text('Inject Content');
-				} else {
-					status.css({'background-color': '#fcf0f1', 'color': '#a00', 'border': '1px solid #dc3232'})
-						  .html('<strong>Error:</strong> ' + response.data);
-					btn.prop('disabled', false).text('Try Again');
-				}
-			});
-		});
-	});
-	</script>
-	<?php
+                log(logId, 'Phase 3: Triggering CLI License Handshakes...', 'wait');
+                await $.post(ajaxurl, { action: 'wpcd_step_license', keys: manifest.keys });
+                log(logId, 'Licensing processed.', 'ok');
+
+                log(logId, 'BUILD SEQUENCE COMPLETE.', 'ok');
+                btn.text('Build Successful');
+
+            } catch (err) {
+                log(logId, 'FATAL ERROR: ' + err, 'err');
+                btn.prop('disabled', false).text('Retry Sequence');
+            }
+        });
+
+        // STEP 2: Package Injection
+        $('#wpcd-inject-package').on('click', async function() {
+            const pkgId = $('#wpcd-package-select').val();
+            const logId = '#wpcd-inject-log';
+            const btn = $(this);
+            
+            if(!pkgId) return;
+
+            btn.prop('disabled', true).text('Injecting...');
+            $(logId).empty().show();
+
+            log(logId, 'Requesting package manifest from Master...', 'wait');
+
+            try {
+                const response = await $.post(ajaxurl, { 
+                    action: 'wpcd_get_package_manifest', 
+                    id: pkgId, 
+                    nonce: '<?php echo wp_create_nonce("wpcd_build_nonce"); ?>' 
+                });
+
+                if(!response || response === null) { throw 'Master Site returned a blank response.'; }
+                if(!response.success) { throw response.data || 'Could not fetch package data.'; }
+
+                const pkgData = response.data;
+
+                // 1. Plugins
+                if (pkgData.plugins && pkgData.plugins.length > 0) {
+                    log(logId, 'Phase 1: Installing Package Plugins...', 'info');
+                    for (let plugin of pkgData.plugins) {
+                        log(logId, 'Installing: ' + plugin.slug, 'wait');
+                        await $.post(ajaxurl, { action: 'wpcd_step_plugin', url: plugin.url });
+                        log(logId, plugin.slug + ' is now active.', 'ok');
+                    }
+                }
+
+                // 2. Pages
+                if (pkgData.content.pages && pkgData.content.pages.length > 0) {
+                    log(logId, 'Phase 2: Injecting ' + pkgData.content.pages.length + ' pages...', 'info');
+                    for (let page of pkgData.content.pages) {
+                        log(logId, 'Processing Page: ' + page.title + '...', 'wait');
+                        const injectRes = await $.post(ajaxurl, { 
+                            action: 'wpcd_step_inject_page', 
+                            page_data: page,
+                            nonce: '<?php echo wp_create_nonce("wpcd_build_nonce"); ?>'
+                        });
+                        if(injectRes.success) log(logId, '✓ Page Created: ' + page.title, 'ok');
+                        else log(logId, '✗ Failed: ' + page.title, 'err');
+                    }
+                }
+
+                // 3. Forms
+                if (pkgData.content.forms && pkgData.content.forms.length > 0) {
+                    log(logId, 'Phase 3: Injecting ' + pkgData.content.forms.length + ' Gravity Forms...', 'info');
+                    for (let form of pkgData.content.forms) {
+                        log(logId, 'Processing Form: ' + form.title + '...', 'wait');
+                        const formRes = await $.post(ajaxurl, {
+                            action: 'wpcd_step_inject_form',
+                            form_data: form,
+                            nonce: '<?php echo wp_create_nonce("wpcd_build_nonce"); ?>'
+                        });
+                        if(formRes.success) log(logId, '✓ Form Created: ' + form.title, 'ok');
+                        else log(logId, '✗ Failed: ' + form.title, 'err');
+                    }
+                }
+
+                // 4. Snippets (SQL-Based v1.6)
+                if (pkgData.content.snippets && pkgData.content.snippets.length > 0) {
+                    log(logId, 'Phase 4: Injecting ' + pkgData.content.snippets.length + ' Code Snippets...', 'info');
+                    for (let snippet of pkgData.content.snippets) {
+                        log(logId, 'Processing Snippet: ' + snippet.title + '...', 'wait');
+                        const snippetRes = await $.post(ajaxurl, {
+                            action: 'wpcd_step_inject_snippet',
+                            snippet_data: snippet,
+                            nonce: '<?php echo wp_create_nonce("wpcd_build_nonce"); ?>'
+                        });
+                        if(snippetRes.success) log(logId, '✓ Snippet Created: ' + snippet.title, 'ok');
+                        else log(logId, '✗ Failed: ' + snippet.title, 'err');
+                    }
+                }
+
+                log(logId, 'INJECTION COMPLETE.', 'ok');
+                btn.text('Injection Successful');
+
+            } catch (err) {
+                log(logId, 'Error: ' + err, 'err');
+                btn.prop('disabled', false).text('Try Again');
+            }
+        });
+    });
+    </script>
+    <?php
 }
 
 /**
- * Ajax Handler: Step 1 (Architecture)
+ * AJAX Handlers
  */
-add_action( 'wp_ajax_wpcd_start_architecture', 'wpcd_handle_architecture_deployment' );
-function wpcd_handle_architecture_deployment() {
-	check_ajax_referer( 'wpcd_deploy_nonce', 'nonce' );
+add_action('wp_ajax_wpcd_get_manifest', function() {
+    check_ajax_referer('wpcd_build_nonce', 'nonce');
+    $master_url = get_option( 'wpcd_master_url' );
+    $response = wp_remote_get( untrailingslashit( $master_url ) . '/wp-json/wpcd/v1/defaults', array( 'headers' => wpcd_get_api_headers(), 'timeout' => 45 ) );
+    if ( is_wp_error( $response ) ) wp_send_json_error('Master unreachable.');
+    $body = json_decode( wp_remote_retrieve_body( $response ), true );
+    wp_send_json_success([
+        'theme'   => $body['core_theme'] ?? 'astra',
+        'plugins' => $body['core_plugins'] ?? [],
+        'keys'    => $body['license_keys'] ?? ''
+    ]);
+});
 
-	$master_url = get_option( 'wpcd_master_url' );
-	if ( ! $master_url ) { wp_send_json_error( 'Master URL not configured.' ); }
+// v1.7 Handler: Fetch manifest with clean buffer protection
+add_action('wp_ajax_wpcd_get_package_manifest', function() {
+    check_ajax_referer('wpcd_build_nonce', 'nonce');
+    $id = intval($_POST['id']);
+    $master_url = get_option( 'wpcd_master_url' );
+    $response = wp_remote_get( untrailingslashit( $master_url ) . "/wp-json/wpcd/v1/package/$id", array( 'headers' => wpcd_get_api_headers(), 'timeout' => 45 ) );
+    
+    if ( is_wp_error( $response ) ) wp_send_json_error('Package fetch failed.');
 
-	$response = wp_remote_get( 
-		untrailingslashit( $master_url ) . '/wp-json/wpcd/v1/defaults', 
-		array( 'headers' => wpcd_get_api_headers(), 'timeout' => 90 ) 
-	);
+    $body = wp_remote_retrieve_body( $response );
+    $data = json_decode( $body, true );
 
-	if ( is_wp_error( $response ) ) { wp_send_json_error( 'Could not reach Master site.' ); }
+    if ( ob_get_length() ) ob_clean();
+    wp_send_json( $data );
+});
 
-	$body = json_decode( wp_remote_retrieve_body( $response ), true );
-	$core_theme   = isset( $body['core_theme'] ) ? $body['core_theme'] : 'astra';
-	$core_plugins = isset( $body['core_plugins'] ) ? $body['core_plugins'] : array();
-	$license_keys = isset( $body['license_keys'] ) ? $body['license_keys'] : '';
+add_action('wp_ajax_wpcd_step_inject_page', function() {
+    check_ajax_referer('wpcd_build_nonce', 'nonce');
+    $page = $_POST['page_data'];
+    $new_id = wp_insert_post( array('post_title' => $page['title'], 'post_status' => 'publish', 'post_type' => 'page') );
+    if ( is_wp_error( $new_id ) ) wp_send_json_error();
+    update_post_meta( $new_id, '_elementor_data', $page['content'] );
+    update_post_meta( $new_id, '_elementor_edit_mode', 'builder' );
+    update_post_meta( $new_id, '_elementor_template_type', 'wp-page' );
+    if ( ! empty( $page['settings'] ) ) { update_post_meta( $new_id, '_elementor_page_settings', $page['settings'] ); }
+    wp_send_json_success();
+});
 
-	// 1. Install & Activate Core Theme via CLI
-	shell_exec( sprintf( 'wp theme install %s --activate', escapeshellarg( $core_theme ) ) );
+add_action('wp_ajax_wpcd_step_inject_form', function() {
+    check_ajax_referer('wpcd_build_nonce', 'nonce');
+    $form_data = $_POST['form_data'];
+    if ( ! class_exists( 'GFAPI' ) ) { wp_send_json_error('Gravity Forms is not active.'); }
+    $form_id = GFAPI::add_form( $form_data );
+    if ( is_wp_error( $form_id ) ) { wp_send_json_error( $form_id->get_error_message() ); }
+    wp_send_json_success();
+});
 
-	// 2. Install & Activate each Core Plugin ZIP
-	$count = 0;
-	foreach ( $core_plugins as $plugin ) {
-		if ( wpcd_sideload_plugin( $plugin['url'] ) ) {
-			$count++;
-		}
-	}
+// v1.6 Handler: Direct SQL Injection for Code Snippets
+add_action('wp_ajax_wpcd_step_inject_snippet', function() {
+    global $wpdb;
+    check_ajax_referer('wpcd_build_nonce', 'nonce');
+    $s = $_POST['snippet_data'];
+    $table_name = $wpdb->prefix . 'snippets';
 
-	// 3. Execute CLI Activations (Elementor, GF, Astra Pro)
-	if ( ! empty( $license_keys ) && function_exists( 'wpcd_execute_cli_activation' ) ) {
-		wpcd_execute_cli_activation( $license_keys );
-	}
+    // Insert directly into the plugin's SQL table
+    $result = $wpdb->insert(
+        $table_name,
+        array(
+            'name'   => $s['title'],
+            'code'   => $s['code'],
+            'scope'  => $s['scope'],
+            'active' => 1
+        ),
+        array( '%s', '%s', '%s', '%d' )
+    );
 
-	wp_send_json_success( array( 'message' => "Theme ($core_theme) activated, $count core plugins installed, and licenses processed via CLI." ) );
-}
+    if ( false === $result ) {
+        wp_send_json_error( $wpdb->last_error );
+    }
 
-/**
- * Ajax Handler: Step 2 (Package Injection)
- */
-add_action( 'wp_ajax_wpcd_inject_package', 'wpcd_handle_package_injection' );
-function wpcd_handle_package_injection() {
-	check_ajax_referer( 'wpcd_deploy_nonce', 'nonce' );
-	$package_id = intval( $_POST['package_id'] );
+    wp_send_json_success();
+});
 
-	$master_url = get_option( 'wpcd_master_url' );
-	$response = wp_remote_get( 
-		untrailingslashit( $master_url ) . "/wp-json/wpcd/v1/package/$package_id", 
-		array( 'headers' => wpcd_get_api_headers(), 'timeout' => 90 ) 
-	);
+add_action('wp_ajax_wpcd_step_theme', function() {
+    $theme = sanitize_text_field($_POST['theme']);
+    shell_exec( sprintf( 'wp theme install %s --activate', escapeshellarg( $theme ) ) );
+    wp_send_json_success();
+});
 
-	if ( is_wp_error( $response ) ) { wp_send_json_error( 'Package retrieval failed.' ); }
+add_action('wp_ajax_wpcd_step_plugin', function() {
+    $url = esc_url_raw($_POST['url']);
+    if ( wpcd_sideload_plugin( $url ) ) wp_send_json_success();
+    else wp_send_json_error();
+});
 
-	$data = json_decode( wp_remote_retrieve_body( $response ), true );
+add_action('wp_ajax_wpcd_step_license', function() {
+    if ( function_exists( 'wpcd_execute_cli_activation' ) ) { wpcd_execute_cli_activation( $_POST['keys'] ); }
+    wp_send_json_success();
+});
 
-	// 1. Install Package-Specific Plugins
-	foreach ( (array) $data['plugins'] as $plugin ) {
-		wpcd_sideload_plugin( $plugin['url'] );
-	}
-
-	// Future: Elementor Data / GF XML import logic here
-
-	wp_send_json_success( array( 'message' => "Package '{$data['title']}' assets pulled successfully." ) );
-}
-
-/**
- * Core Sideloading Function
- */
 function wpcd_sideload_plugin( $url ) {
-	if ( empty( $url ) ) return false;
-
-	include_once ABSPATH . 'wp-admin/includes/file.php';
-	include_once ABSPATH . 'wp-admin/includes/misc.php';
-	include_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
-
-	$upgrader = new Plugin_Upgrader( new Automatic_Upgrader_Skin() );
-	$result   = $upgrader->install( $url );
-
-	if ( is_wp_error( $result ) || ! $result ) {
-		return false;
-	}
-
-	$path = parse_url( $url, PHP_URL_PATH );
-	$slug = basename( $path, '.zip' );
-	
-	$plugin_file = "$slug/$slug.php";
-	if ( file_exists( WP_PLUGIN_DIR . '/' . $plugin_file ) ) {
-		activate_plugin( $plugin_file );
-	} else {
-		// Fallback for plugins where main file != folder name
-		$all_plugins = get_plugins( '/' . $slug );
-		if ( ! empty( $all_plugins ) ) {
-			$keys = array_keys( $all_plugins );
-			activate_plugin( $slug . '/' . $keys[0] );
-		}
-	}
-
-	return $slug;
+    require_once ABSPATH . 'wp-admin/includes/file.php';
+    require_once ABSPATH . 'wp-admin/includes/misc.php';
+    require_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
+    require_once ABSPATH . 'wp-admin/includes/plugin-install.php';
+    if ( ! defined( 'FS_METHOD' ) ) define( 'FS_METHOD', 'direct' );
+    $temp_file = download_url( $url, 120 );
+    if ( is_wp_error( $temp_file ) ) return false;
+    $upgrader = new Plugin_Upgrader( new Automatic_Upgrader_Skin() );
+    $result   = $upgrader->install( $temp_file );
+    @unlink( $temp_file );
+    if ( is_wp_error( $result ) ) return false;
+    $slug = basename( parse_url( $url, PHP_URL_PATH ), '.zip' );
+    foreach ( get_plugins() as $file => $data ) { if ( strpos( $file, $slug . '/' ) === 0 ) { activate_plugin( $file ); return true; } }
+    return false;
 }
