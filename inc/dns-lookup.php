@@ -1,6 +1,6 @@
 <?php
 /**
- * DNS and Domain Information Utility for Adam.
+ * DNS and Domain Information Utility.
  * v1.37 - Finalized with "Best Guess" Email Provider Logic.
  *
  * @package WPCloudDeployerClient
