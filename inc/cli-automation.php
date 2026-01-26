@@ -1,6 +1,6 @@
 <?php
 /**
- * Handles terminal-level activation for Premium plugins and post-deployment cleanup.
+ * CLI Automation Service: Handles terminal-level activations and cleanup.
  *
  * @package WPCloudDeployerClient
  */
@@ -10,9 +10,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 /**
- * Executes CLI commands for specific plugins based on the license key string.
+ * Main Orchestrator: Loops through license strings and triggers specific CLI logic.
  *
- * @param string $license_string Raw slug|key from Master.
+ * @param string $license_string Format: slug|key (one per line)
  */
 function wpcd_execute_cli_activation( $license_string ) {
 	if ( empty( $license_string ) ) {
@@ -37,51 +37,79 @@ function wpcd_execute_cli_activation( $license_string ) {
 			case 'gravityforms':
 				wpcd_cli_activate_gravityforms( $key );
 				break;
+
+			case 'astra-addon':
+				wpcd_cli_activate_astra( $key );
+				break;
 		}
 	}
 
-	// Run cleanup once all keys are processed
+	// Finalize the environment
 	wpcd_cli_cleanup();
 }
 
 /**
- * Elementor Pro Activation via CLI.
+ * Elementor Pro Activation.
  */
 function wpcd_cli_activate_elementor( $key ) {
-	// Command: wp elementor-pro license activate [key]
+	// Ensure plugin is active before licensing
+	shell_exec( 'wp plugin activate elementor-pro' );
+	
 	$command = sprintf( 'wp elementor-pro license activate %s', escapeshellarg( $key ) );
 	shell_exec( $command );
 }
 
 /**
- * Gravity Forms Activation via CLI.
+ * Astra Pro Activation (Brainstorm Force).
+ * Requires force-activation of both theme and addon to register correctly.
+ */
+function wpcd_cli_activate_astra( $key ) {
+	// 1. Ensure the Parent Theme is active
+	shell_exec( 'wp theme activate astra' );
+
+	// 2. Ensure the Addon Plugin is active
+	shell_exec( 'wp plugin activate astra-addon' );
+
+	// 3. Clear any existing/stuck license data
+	shell_exec( 'wp brainstormforce license deactivate astra-addon' );
+
+	// 4. Activate new license
+	$command = sprintf( 
+		'wp brainstormforce license activate astra-addon %s', 
+		escapeshellarg( $key ) 
+	);
+	shell_exec( $command );
+}
+
+/**
+ * Gravity Forms Activation.
  */
 function wpcd_cli_activate_gravityforms( $key ) {
-	// 1. Install/Activate GF CLI add-on (Required for 'wp gf' commands)
+	// 1. Install/Activate GF CLI add-on (Needed for 'wp gf' commands)
 	shell_exec( 'wp plugin install gravityformscli --activate' );
 
-	// 2. Register GF core key and activate
+	// 2. Register key and install core
 	$command = sprintf( 'wp gf install --key=%s --activate', escapeshellarg( $key ) );
 	shell_exec( $command );
 }
 
 /**
- * Cleanup Service: Deletes helper plugins and flushes caches.
+ * Post-Build Cleanup and Optimization.
  */
 function wpcd_cli_cleanup() {
-	// 1. Delete Gravity Forms CLI helper (No longer needed after activation)
+	// 1. Remove Gravity Forms CLI helper (No longer needed)
 	shell_exec( 'wp plugin deactivate gravityformscli' );
 	shell_exec( 'wp plugin delete gravityformscli' );
 
-	// 2. Flush Rewrite Rules
+	// 2. Flush Rewrite Rules (Prevents 404s on new installs)
 	shell_exec( 'wp rewrite flush' );
 
-	// 3. SiteGround Specific: Flush Object Cache if available
+	// 3. Purge SiteGround Cache if SG Optimizer is active
 	if ( class_exists( 'SG_CachePress' ) ) {
 		shell_exec( 'wp sg purge' );
 	}
 
-	// 4. Clear Elementor CSS Cache to prevent styling issues on import
+	// 4. Clear Elementor CSS Cache
 	if ( class_exists( '\Elementor\Plugin' ) ) {
 		shell_exec( 'wp elementor flush_css' );
 	}
