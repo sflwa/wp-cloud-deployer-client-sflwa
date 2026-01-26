@@ -44,7 +44,7 @@ function wpcd_client_dashboard() {
         <h2 class="nav-tab-wrapper">
             <a href="?page=wpcd-client&tab=connect" class="nav-tab <?php echo !isset($_GET['tab']) || $_GET['tab'] == 'connect' ? 'nav-tab-active' : ''; ?>">Connect to Master</a>
             <a href="?page=wpcd-client&tab=deploy" class="nav-tab <?php echo isset($_GET['tab']) && $_GET['tab'] == 'deploy' ? 'nav-tab-active' : ''; ?>">Deploy Content</a>
-            <a href="?page=wpcd-client&tab=dns" class="nav-tab <?php echo isset($_GET['tab']) && $_GET['tab'] == 'dns' ? 'nav-tab-active' : ''; ?>">DNS Info</a>
+            <a href="?page=wpcd-client&tab=dns" class="nav-tab <?php echo isset($_GET['tab']) && $_GET['tab'] == 'dns' ? 'nav-tab-active' : ''; ?>">Domain/DNS Info</a>
         </h2>
         <?php
         $tab = isset($_GET['tab']) ? $_GET['tab'] : 'connect';
