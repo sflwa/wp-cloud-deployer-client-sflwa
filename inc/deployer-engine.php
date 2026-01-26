@@ -1,8 +1,8 @@
 <?php
 /**
- * Linear Build Engine v1.7
- * Baseline v1.5 + Direct SQL Snippet Injection.
- * * Strict Policy: No refactoring/shortening applied.
+ * Linear Build Engine v2.0
+ * Updated: Removed Step 3 Visuals and Redundant DNS Logic.
+ * * * Strict Policy: No refactoring applied to Core Build or Package Injection.
  *
  * @package WPCloudDeployerClient
  */
@@ -46,7 +46,7 @@ function wpcd_render_deployment_screen() {
     </style>
 
     <div class="wrap">
-        <h1>Cloud Architecture Deployer <small style="font-size: 0.5em; vertical-align: middle; opacity: 0.6;">v1.6</small></h1>
+        <h1>Cloud Architecture Deployer <small style="font-size: 0.5em; vertical-align: middle; opacity: 0.6;">v2.0</small></h1>
         
         <div class="wpcd-step-card">
             <h2>Step 1: Site Core Build</h2>
@@ -81,7 +81,7 @@ function wpcd_render_deployment_screen() {
             $(container).scrollTop($(container)[0].scrollHeight);
         }
 
-        // Fetch Packages
+        // Fetch Packages from Master
         $.ajax({
             url: masterUrl + '/wp-json/wpcd/v1/packages',
             beforeSend: function(xhr) { xhr.setRequestHeader('Authorization', authHeader); },
@@ -92,9 +92,6 @@ function wpcd_render_deployment_screen() {
                     select.append('<option value="'+pkg.id+'">'+pkg.title+'</option>');
                 });
                 $('#wpcd-inject-package').prop('disabled', false);
-            },
-            error: function() {
-                $('#wpcd-package-select').empty().append('<option value="">Error connecting to Warehouse</option>');
             }
         });
 
@@ -124,11 +121,8 @@ function wpcd_render_deployment_screen() {
                 for (let plugin of manifest.plugins) {
                     log(logId, 'Sideloading: ' + plugin.slug + '...', 'wait');
                     const pluginRes = await $.post(ajaxurl, { action: 'wpcd_step_plugin', url: plugin.url });
-                    if(pluginRes.success) {
-                        log(logId, 'Successfully installed ' + plugin.slug, 'ok');
-                    } else {
-                        log(logId, 'Failed: ' + plugin.slug, 'err');
-                    }
+                    if(pluginRes.success) log(logId, 'Successfully installed ' + plugin.slug, 'ok');
+                    else log(logId, 'Failed: ' + plugin.slug, 'err');
                 }
 
                 log(logId, 'Phase 3: Triggering CLI License Handshakes...', 'wait');
@@ -164,8 +158,8 @@ function wpcd_render_deployment_screen() {
                     nonce: '<?php echo wp_create_nonce("wpcd_build_nonce"); ?>' 
                 });
 
-                if(!response || response === null) { throw 'Master Site returned a blank response.'; }
-                if(!response.success) { throw response.data || 'Could not fetch package data.'; }
+                if(!response || response === null) throw 'Master Site returned a blank response.';
+                if(!response.success) throw response.data || 'Could not fetch package data.';
 
                 const pkgData = response.data;
 
@@ -209,7 +203,7 @@ function wpcd_render_deployment_screen() {
                     }
                 }
 
-                // 4. Snippets (SQL-Based v1.6)
+                // 4. Snippets (SQL-Based)
                 if (pkgData.content.snippets && pkgData.content.snippets.length > 0) {
                     log(logId, 'Phase 4: Injecting ' + pkgData.content.snippets.length + ' Code Snippets...', 'info');
                     for (let snippet of pkgData.content.snippets) {
@@ -253,15 +247,13 @@ add_action('wp_ajax_wpcd_get_manifest', function() {
     ]);
 });
 
-// v1.7 Handler: Fetch manifest with clean buffer protection
 add_action('wp_ajax_wpcd_get_package_manifest', function() {
     check_ajax_referer('wpcd_build_nonce', 'nonce');
     $id = intval($_POST['id']);
     $master_url = get_option( 'wpcd_master_url' );
     $response = wp_remote_get( untrailingslashit( $master_url ) . "/wp-json/wpcd/v1/package/$id", array( 'headers' => wpcd_get_api_headers(), 'timeout' => 45 ) );
-    
     if ( is_wp_error( $response ) ) wp_send_json_error('Package fetch failed.');
-
+    
     $body = wp_remote_retrieve_body( $response );
     $data = json_decode( $body, true );
 
@@ -290,14 +282,12 @@ add_action('wp_ajax_wpcd_step_inject_form', function() {
     wp_send_json_success();
 });
 
-// v1.6 Handler: Direct SQL Injection for Code Snippets
 add_action('wp_ajax_wpcd_step_inject_snippet', function() {
     global $wpdb;
     check_ajax_referer('wpcd_build_nonce', 'nonce');
     $s = $_POST['snippet_data'];
     $table_name = $wpdb->prefix . 'snippets';
 
-    // Insert directly into the plugin's SQL table
     $result = $wpdb->insert(
         $table_name,
         array(
@@ -309,10 +299,7 @@ add_action('wp_ajax_wpcd_step_inject_snippet', function() {
         array( '%s', '%s', '%s', '%d' )
     );
 
-    if ( false === $result ) {
-        wp_send_json_error( $wpdb->last_error );
-    }
-
+    if ( false === $result ) { wp_send_json_error( $wpdb->last_error ); }
     wp_send_json_success();
 });
 
