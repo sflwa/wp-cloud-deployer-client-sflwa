@@ -40,7 +40,7 @@ function wpcd_client_dashboard() {
     ?>
     <div class="wrap">
         <h1>Cloud Deployer Dashboard</h1>
-        <p>Welcome, Adam. Use the tabs below to connect to your library and start your site build.</p>
+        <p>Welcome. Use the tabs below to connect to your library and start your site build.</p>
         <h2 class="nav-tab-wrapper">
             <a href="?page=wpcd-client&tab=connect" class="nav-tab <?php echo !isset($_GET['tab']) || $_GET['tab'] == 'connect' ? 'nav-tab-active' : ''; ?>">Connect to Master</a>
             <a href="?page=wpcd-client&tab=deploy" class="nav-tab <?php echo isset($_GET['tab']) && $_GET['tab'] == 'deploy' ? 'nav-tab-active' : ''; ?>">Deploy Content</a>
