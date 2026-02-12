@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       WP Cloud Deployer Client by SFLWA
  * Description:       The "Receiver" plugin to pull and configure content from your Master library.
- * Version:           1.0.0
+ * Version:           2.0.0
  * Author:            SFLWA
  * License:           GPL-2.0-or-later
  * Text Domain:       wpcd-client
